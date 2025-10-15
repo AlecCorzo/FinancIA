@@ -1,0 +1,58 @@
+version: "3.9"
+
+services:
+  backend:
+    build: ./backend
+    container_name: financia_backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - db
+      - rabbitmq
+    command: sh -c "sleep 5 && uvicorn main:app --host 0.0.0.0 --port 8000"
+    environment:
+      - DATABASE_URL=postgresql://financia_user:financia_pass@db:5432/financia
+    restart: always
+
+  db:
+    image: postgres:14
+    container_name: financia_db
+    environment:
+      POSTGRES_USER: financia_user
+      POSTGRES_PASSWORD: financia_pass
+      POSTGRES_DB: financia
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: always
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: financia_rabbitmq
+    ports:
+      - "5672:5672"     # comunicación interna
+      - "15672:15672"   # panel de administración web
+    environment:
+      RABBITMQ_DEFAULT_USER: admin
+      RABBITMQ_DEFAULT_PASS: admin
+    restart: always
+
+  traefik:
+    image: traefik:v3.0
+    container_name: financia_proxy
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--entrypoints.web.address=:80"
+    ports:
+      - "80:80"      # acceso a la app por navegador
+      - "8080:8080"  # dashboard de Traefik
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: always
+
+volumes:
+  pgdata:
