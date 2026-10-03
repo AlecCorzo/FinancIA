@@ -1,43 +1,73 @@
-version: "3.9"
-
 services:
   backend:
     build: ./backend
     container_name: financia_backend
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/%2F
     ports:
       - "8000:8000"
-    volumes:
-      - ./backend:/app
     depends_on:
-      - db
-      - rabbitmq
-    command: sh -c "sleep 5 && uvicorn main:app --host 0.0.0.0 --port 8000"
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.financia.rule=PathPrefix(`/`)"
+      - "traefik.http.routers.financia.entrypoints=web"
+      - "traefik.http.services.financia.loadbalancer.server.port=8000"
+    restart: always
+
+  # Procesa las solicitudes de voz y texto de la cola con Gemini
+  worker:
+    build: ./backend
+    container_name: financia_worker
+    command: python worker.py
+    env_file: .env
     environment:
-      - DATABASE_URL=postgresql://financia_user:financia_pass@db:5432/financia
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672/%2F
+    depends_on:
+      db:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     restart: always
 
   db:
     image: postgres:14
     container_name: financia_db
     environment:
-      POSTGRES_USER: financia_user
-      POSTGRES_PASSWORD: financia_pass
-      POSTGRES_DB: financia
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
     ports:
       - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
     restart: always
 
   rabbitmq:
     image: rabbitmq:3-management
     container_name: financia_rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
     ports:
       - "5672:5672"     # comunicación interna
       - "15672:15672"   # panel de administración web
-    environment:
-      RABBITMQ_DEFAULT_USER: admin
-      RABBITMQ_DEFAULT_PASS: admin
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
     restart: always
 
   traefik:
@@ -46,12 +76,13 @@ services:
     command:
       - "--api.insecure=true"
       - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
       - "--entrypoints.web.address=:80"
     ports:
       - "80:80"      # acceso a la app por navegador
       - "8080:8080"  # dashboard de Traefik
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - "//var/run/docker.sock:/var/run/docker.sock:ro"
     restart: always
 
 volumes:
